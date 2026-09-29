@@ -112,19 +112,49 @@ GEMINI_MODEL=gemini-2.5-flash
 
 ## Deploy to Cloud Run
 
-Runs *as* the SA — no impersonation and no key at runtime; ADC is automatic.
+The service runs *as* `pattern-team09-sa` — no impersonation and no key at
+runtime; ADC is automatic on Cloud Run.
+
+Deployment is two steps: **build the image** (Cloud Build → Artifact Registry),
+then **apply the infra** (Terraform creates/updates the Cloud Run service).
 
 ```bash
-gcloud run deploy egen-recipe-to-sql-engine \
-  --source . \
-  --region $REGION \
-  --service-account $SA \
-  --set-env-vars GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_PROJECT=$PROJECT,GOOGLE_CLOUD_LOCATION=$REGION,GEMINI_MODEL=gemini-2.5-flash \
-  --allow-unauthenticated
+# 1. Build & push a versioned image (bump the tag each build)
+gcloud builds submit \
+  --tag us-central1-docker.pkg.dev/idc-hackathon-509702/egen-apps/recipe-to-sql:v1 \
+  --timeout=1200s .
+
+# 2. Apply the Terraform (see terraform/README.md for first-time import steps)
+cd terraform
+GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token) terraform apply
 ```
 
-`--source .` builds the node-based `Dockerfile`, which serves both the built
-frontend and the `/api` backend as a single service.
+The `Dockerfile` uses **Node 22** (deps require Node ≥ 20) and `npm install`
+(not `npm ci`) so the correct musl native binaries for `@tailwindcss/oxide` and
+`esbuild` are resolved on Alpine. It serves the built frontend **and** the
+`/api` backend as one service.
+
+Live service: <https://recipe-to-sql-dhkt3dxhuq-uc.a.run.app>
+
+---
+
+## Team access — letting a teammate build & deploy
+
+Building and deploying needs roles the team group does **not** have by default
+(`idc-ideathon@egen.ai` only has `aiplatform.user`, `serviceAccountTokenCreator`,
+`serviceAccountUser`, `viewer`). Someone with `projectIamAdmin` grants the group
+once so every teammate can build and deploy:
+
+```bash
+for R in roles/serviceusage.serviceUsageConsumer roles/cloudbuild.builds.editor \
+         roles/artifactregistry.writer roles/run.admin roles/storage.admin; do
+  gcloud projects add-iam-policy-binding idc-hackathon-509702 \
+    --member="group:idc-ideathon@egen.ai" --role="$R" --condition=None
+done
+```
+
+A teammate then: `gcloud auth login`, then the two deploy steps above. To run
+AI mode locally instead, they use ADC impersonation (see **Local development**).
 
 ---
 

@@ -1,0 +1,14 @@
+# Terraform provider plugins and local cache
+.terraform/
+.terraform.tfstate.lock.info
+
+# State files (local backend) — never commit; may contain sensitive values
+*.tfstate
+*.tfstate.*
+
+# Saved plans (binary)
+tfplan
+*.tfplan
+
+crash.log
+crash.*.log
