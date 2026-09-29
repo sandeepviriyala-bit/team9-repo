@@ -1,0 +1,66 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  
+  --color-blue-50: #F2F7FF;
+  --color-blue-900: #002259;
+  --color-gray-60: #E6F0FF;
+  --color-gray-200: #4D6080;
+  --color-gray-1000: #001433;
+}
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    line-height: 1.15;
+    color: var(--color-gray-1000);
+    background-color: #FFFFFF;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    color: var(--color-blue-900);
+    font-weight: 400; /* Regular weight as per branding */
+    margin-bottom: 1rem;
+  }
+
+  /* Sentence case for all text */
+  body {
+    text-transform: lowercase;
+  }
+  body::first-letter {
+    text-transform: uppercase;
+  }
+  
+  /* Resetting text-transform for code blocks and specific inputs if needed */
+  pre, code, textarea {
+    text-transform: none;
+  }
+}
+
+@layer utilities {
+  .egen-card-primary {
+    background-color: #FFFFFF;
+    border-radius: 16px;
+  }
+  .egen-card-secondary {
+    background-color: var(--color-blue-50);
+    border-radius: 8px;
+  }
+  .egen-sidebar {
+    background-color: var(--color-gray-60);
+  }
+  .egen-heading {
+    color: var(--color-blue-900);
+    font-size: 1.5rem;
+    margin-top: 2rem;
+  }
+  .egen-body {
+    color: var(--color-gray-1000);
+  }
+  .egen-subtle {
+    color: var(--color-gray-200);
+    font-size: 0.875rem;
+  }
+}

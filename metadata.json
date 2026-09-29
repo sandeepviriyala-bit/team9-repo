@@ -1,0 +1,5 @@
+{
+  "name": "Egen Recipe-to-SQL Engine",
+  "description": "Enterprise-grade converter for Salesforce CRM Analytics Recipes to BigQuery SQL, following the Egen Lens design philosophy.",
+  "requestFramePermissions": []
+}
