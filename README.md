@@ -6,6 +6,48 @@ A deterministic engine handles the core translation; an **optional hybrid AI pas
 
 **Live demo:** <https://recipe-to-sql-dhkt3dxhuq-uc.a.run.app>
 
+## Overview
+
+### The problem
+Teams on **Salesforce CRM Analytics** build data transformations as visual
+"recipes," stored as JSON — a graph of steps (load, filter, aggregate, join,
+compute). Migrating that analytics to **Google BigQuery** means rewriting every
+recipe as SQL by hand: slow, error-prone, and requiring expertise in both worlds.
+
+### What this app does
+Paste or upload a recipe JSON (optionally your BigQuery schema) and it produces
+ready-to-run BigQuery SQL, plus a CTE breakdown, auto field/table mapping, a
+validation report, QA queries, and optimization notes. Internally it
+topologically sorts the recipe's node graph and translates each node into a
+named SQL CTE.
+
+### How AI is used (hybrid)
+The core translation is **deterministic** (`src/engine.ts`) — fast, free, and
+predictable, but it only knows five actions (`load`, `filter`, `aggregate`,
+`join`, `computeExpression`). AI fills the gaps rather than replacing the engine:
+
+1. The **engine runs first** and flags anything it can't handle (e.g. an
+   `unsupported action: pivot`).
+2. When AI mode is on, the backend sends **Gemini (via Vertex AI)** the recipe,
+   the engine's SQL, the flagged issues, and the metadata, and asks it to
+   translate the unsupported nodes, add optimizations, and explain its changes.
+3. Results are **merged** — deterministic SQL for known parts, Gemini's SQL for
+   the gaps — returned with an `ai_enhanced` flag and `ai_notes`.
+
+**Why hybrid:** guaranteed-correct output for the common cases (no LLM
+variability), AI only where rules fall short, and **graceful degradation** to the
+deterministic result if AI is unconfigured or unavailable — it never hard-fails.
+
+```
+React UI ──/api/convert──▶ Express backend
+                              ├─ RecipeToSQLEngine   (deterministic, always)
+                              └─ Gemini via Vertex AI (fills gaps, when enabled)
+```
+
+On Cloud Run the backend runs as a service account and calls Vertex AI through
+that identity — **no API keys**, governed access, and audit logging (the
+enterprise-appropriate choice over a raw API key).
+
 ## Features
 
 - **Recipe JSON Parsing** — paste or upload Salesforce recipe JSON; the engine topologically sorts the DAG of transformation nodes
