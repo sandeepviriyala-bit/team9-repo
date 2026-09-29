@@ -167,6 +167,8 @@ export default function App() {
   });
   const [mappingsConfirmed, setMappingsConfirmed] = useState(false);
   const [pendingMappings, setPendingMappings] = useState<MappingConfig | null>(null);
+  const [useAI, setUseAI] = useState(false);
+  const [converting, setConverting] = useState(false);
 
   const recipeFileRef = useRef<HTMLInputElement>(null);
   const metadataFileRef = useRef<HTMLInputElement>(null);
@@ -176,13 +178,10 @@ export default function App() {
     fetchSourceTables();
   }, []);
 
-  const handleConvert = (includeDDL: boolean) => {
+  const handleConvert = async (includeDDL: boolean) => {
+    let parsed: any;
     try {
-      const parsed = JSON.parse(jsonInput);
-      const engine = new RecipeToSQLEngine(parsed, includeDDL ? target : undefined, metadata, mappings);
-      const result = engine.generate();
-      setOutput(result);
-      setShowModal(false);
+      parsed = JSON.parse(jsonInput);
     } catch (e: any) {
       console.error(e);
       setOutput({
@@ -194,7 +193,47 @@ export default function App() {
         optimization_notes: []
       });
       setShowModal(false);
+      return;
     }
+
+    const effectiveTarget = includeDDL ? target : undefined;
+
+    // AI mode: run the hybrid pass on the Express backend (engine + Gemini).
+    if (useAI) {
+      setConverting(true);
+      try {
+        const res = await fetch('/api/convert', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ recipe: parsed, target: effectiveTarget, metadata, mappings, useAI: true })
+        });
+        if (!res.ok) throw new Error(`Backend responded ${res.status}`);
+        const result: EngineOutput = await res.json();
+        setOutput(result);
+        setShowModal(false);
+        return;
+      } catch (e: any) {
+        console.error(e);
+        // Fall back to the deterministic client-side engine if the backend is down.
+        const engine = new RecipeToSQLEngine(parsed, effectiveTarget, metadata, mappings);
+        const result = engine.generate();
+        setOutput({
+          ...result,
+          ai_enhanced: false,
+          ai_notes: [`AI backend unavailable (${e.message}); showing deterministic output.`]
+        });
+        setShowModal(false);
+        return;
+      } finally {
+        setConverting(false);
+      }
+    }
+
+    // Deterministic mode: run the engine locally in the browser (no backend needed).
+    const engine = new RecipeToSQLEngine(parsed, effectiveTarget, metadata, mappings);
+    const result = engine.generate();
+    setOutput(result);
+    setShowModal(false);
   };
 
   const handleRecipeUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -748,11 +787,27 @@ export default function App() {
             </div>
           </section>
           
+          <label className="flex items-center gap-3 mb-3 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={useAI}
+              onChange={(e) => setUseAI(e.target.checked)}
+              className="h-4 w-4 accent-blue-900 cursor-pointer"
+            />
+            <span className="text-sm text-blue-900">
+              enhance with gemini ai (hybrid)
+              <span className="block text-xs text-gray-400">
+                runs the engine, then asks gemini to fix unsupported nodes & add optimizations
+              </span>
+            </span>
+          </label>
+
           <button
             onClick={() => setShowModal(true)}
-            className="w-full py-4 bg-blue-900 text-white rounded-lg hover:bg-opacity-90 transition-all cursor-pointer"
+            disabled={converting}
+            className="w-full py-4 bg-blue-900 text-white rounded-lg hover:bg-opacity-90 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            convert to bigquery sql
+            {converting ? 'converting…' : 'convert to bigquery sql'}
           </button>
         </aside>
 
@@ -949,6 +1004,22 @@ export default function App() {
                 </motion.div>
               )}
             </AnimatePresence>
+
+            {/* Gemini AI Notes */}
+            {output && output.ai_notes && output.ai_notes.length > 0 && (
+              <div className="mt-12 pt-12 border-t border-gray-100">
+                <h2 className="egen-heading">
+                  gemini ai {output.ai_enhanced ? '✓ enhanced' : '(not applied)'}
+                </h2>
+                <div className="grid grid-cols-1 gap-4 mt-4">
+                  {output.ai_notes.map((note, i) => (
+                    <div key={i} className="egen-card-secondary p-4 text-sm">
+                      {note}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Optimization Notes */}
             {output && output.optimization_notes.length > 0 && (
