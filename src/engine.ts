@@ -145,13 +145,48 @@ export class RecipeToSQLEngine {
         this.cteBreakdown.push({ step: name, description: `aggregate by ${groups}` });
         break;
 
-      case 'join':
-        const joinType = parameters.joinType.toUpperCase();
-        const leftKey = applyColumnMappings(parameters.leftKeys[0]);
-        const rightKey = applyColumnMappings(parameters.rightKeys[0]);
-        sql = `  SELECT L.*, R.* EXCEPT(${rightKey}) FROM ${sources[0]} AS L\n  ${joinType} JOIN ${sources[1]} AS R ON L.${leftKey} = R.${rightKey}`;
-        this.cteBreakdown.push({ step: name, description: `${joinType} join on ${leftKey}` });
+      case 'join': {
+        const p = parameters || {};
+
+        // Extract a single key name from the many shapes recipes use:
+        // an array or a scalar, of strings or of { name | field | fieldName } objects.
+        const firstKey = (v: any): string | undefined => {
+          if (v == null) return undefined;
+          const item = Array.isArray(v) ? v[0] : v;
+          if (item == null) return undefined;
+          return typeof item === 'string' ? item : (item.name || item.field || item.fieldName);
+        };
+
+        const leftSrc = sources?.[0] ?? p.left ?? p.leftSource ?? p.leftInput;
+        const rightSrc = sources?.[1] ?? p.right ?? p.rightSource ?? p.rightInput;
+
+        const rawLeftKey = firstKey(p.leftKeys) ?? firstKey(p.leftKey) ?? firstKey(p.leftQualifierKeys) ?? firstKey(p.leftQualifier);
+        const rawRightKey = firstKey(p.rightKeys) ?? firstKey(p.rightKey) ?? firstKey(p.rightQualifierKeys) ?? firstKey(p.rightQualifier);
+        const leftKey = rawLeftKey ? applyColumnMappings(rawLeftKey) : undefined;
+        const rightKey = rawRightKey ? applyColumnMappings(rawRightKey) : undefined;
+
+        // CRM Analytics uses LOOKUP for a left-outer style join; normalize underscores.
+        let joinType = (p.joinType || 'LEFT OUTER').toString().toUpperCase().replace(/_/g, ' ');
+        if (joinType === 'LOOKUP') joinType = 'LEFT OUTER';
+
+        if (!leftSrc || !rightSrc) {
+          this.issues.push(`join node ${name}: expected two sources but found ${[leftSrc, rightSrc].filter(Boolean).length}`);
+          sql = `  SELECT * FROM ${leftSrc || rightSrc || 'DUAL'}`;
+          this.cteBreakdown.push({ step: name, description: `join skipped (missing source)` });
+          break;
+        }
+
+        if (!leftKey || !rightKey) {
+          this.issues.push(`join node ${name}: could not find join keys (looked for leftKeys/rightKeys, leftKey/rightKey, leftQualifier/rightQualifier)`);
+          sql = `  SELECT L.*, R.* FROM ${leftSrc} AS L\n  ${joinType} JOIN ${rightSrc} AS R ON /* TODO: join keys not found in recipe */ FALSE`;
+          this.cteBreakdown.push({ step: name, description: `${joinType} join (keys unresolved)` });
+          break;
+        }
+
+        sql = `  SELECT L.*, R.* EXCEPT(${rightKey}) FROM ${leftSrc} AS L\n  ${joinType} JOIN ${rightSrc} AS R ON L.${leftKey} = R.${rightKey}`;
+        this.cteBreakdown.push({ step: name, description: `${joinType} join on ${leftKey} = ${rightKey}` });
         break;
+      }
 
       case 'computeExpression':
         const expressions = parameters.expressions.map((e: any) => {
