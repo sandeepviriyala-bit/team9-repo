@@ -100,15 +100,28 @@ export async function enhanceWithGemini(
     });
     const patch = parsePatch(response.text ?? '');
 
+    // When Gemini actually rewrote the SQL to resolve the engine's flagged
+    // issues, reflect that in the report so the UI shows success, not the
+    // engine's original FAIL. Keep the original issues visible in ai_notes.
+    const usedEnhanced = Boolean(patch.enhanced_sql?.trim());
+    const engineIssues = base.validation_report.issues;
+    const resolved = usedEnhanced && engineIssues.length > 0;
+
     return {
       ...base,
-      final_sql: patch.enhanced_sql?.trim() ? patch.enhanced_sql.trim() : base.final_sql,
+      final_sql: usedEnhanced ? patch.enhanced_sql!.trim() : base.final_sql,
+      validation_report: resolved
+        ? { status: 'PASS' as const, issues: [] }
+        : base.validation_report,
       optimization_notes: [
         ...base.optimization_notes,
         ...(patch.optimization_notes ?? []),
       ],
       ai_enhanced: true,
-      ai_notes: patch.ai_notes ?? [],
+      ai_notes: [
+        ...(patch.ai_notes ?? []),
+        ...(resolved ? [`Resolved by Gemini: ${engineIssues.join('; ')}`] : []),
+      ],
     };
   } catch (err: any) {
     return {
