@@ -202,6 +202,62 @@ export class RecipeToSQLEngine {
         this.cteBreakdown.push({ step: name, description: `compute fields: ${parameters.expressions.map((e: any) => e.name).join(', ')}` });
         break;
 
+      case 'schema': {
+        // CRM Analytics "schema" nodes drop, keep, or rename columns.
+        const p = parameters || {};
+        const src = sources?.[0] ?? p.input;
+        if (!src) {
+          this.issues.push(`schema node ${name}: missing source`);
+          sql = `  SELECT * FROM DUAL`;
+          this.cteBreakdown.push({ step: name, description: 'schema skipped (missing source)' });
+          break;
+        }
+
+        const nameOf = (f: any): string | undefined =>
+          typeof f === 'string' ? f : (f?.name || f?.field || f?.fieldName);
+
+        const slice = p.slice || {};
+        const sliceMode = (slice.mode || '').toString().toUpperCase();
+        const sliceFields: string[] = (Array.isArray(slice.fields) ? slice.fields : []).map(nameOf).filter(Boolean);
+
+        // Field-level renames: an entry that carries a different target name.
+        const renames: { from: string; to: string }[] = [];
+        (Array.isArray(p.fields) ? p.fields : []).forEach((f: any) => {
+          const from = nameOf(f);
+          const to = f?.newName || f?.newProperties?.name || f?.rename;
+          if (from && to && from !== to) {
+            renames.push({ from, to });
+            this.fieldMappings.push({ source_field: from, transformation: 'rename', final_field: to });
+          }
+        });
+
+        const mapCol = (c: string) => applyColumnMappings(c);
+
+        if (sliceMode === 'KEEP' && sliceFields.length) {
+          const cols = sliceFields.map(c => {
+            const r = renames.find(x => x.from === c);
+            return r ? `${mapCol(r.from)} AS ${r.to}` : mapCol(c);
+          });
+          sql = `  SELECT ${cols.join(', ')} FROM ${src}`;
+          this.cteBreakdown.push({ step: name, description: `keep ${sliceFields.length} field(s)` });
+        } else {
+          const drops = [...new Set([...sliceFields, ...renames.map(r => r.from)].map(mapCol))];
+          const exceptClause = drops.length ? ` EXCEPT(${drops.join(', ')})` : '';
+          const renamed = renames.map(r => `${mapCol(r.from)} AS ${r.to}`);
+          const tail = renamed.length ? `, ${renamed.join(', ')}` : '';
+          sql = `  SELECT *${exceptClause}${tail} FROM ${src}`;
+          const desc = [
+            sliceFields.length ? `drop ${sliceFields.length}` : '',
+            renames.length ? `rename ${renames.length}` : '',
+          ].filter(Boolean).join(', ');
+          this.cteBreakdown.push({ step: name, description: `schema (${desc || 'passthrough'})` });
+          if (!sliceFields.length && !renames.length) {
+            this.issues.push(`schema node ${name}: no drop/keep/rename recognized; emitted SELECT *`);
+          }
+        }
+        break;
+      }
+
       default:
         sql = `  SELECT * FROM ${sources?.[0] || 'DUAL'}`;
         this.issues.push(`unsupported action: ${action} in node ${name}`);
