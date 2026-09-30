@@ -201,11 +201,14 @@ export default function App() {
     // AI mode: run the hybrid pass on the Express backend (engine + Gemini).
     if (useAI) {
       setConverting(true);
+      const ctrl = new AbortController();
+      const timeout = setTimeout(() => ctrl.abort(), 60000);
       try {
         const res = await fetch('/api/convert', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ recipe: parsed, target: effectiveTarget, metadata, mappings, useAI: true })
+          body: JSON.stringify({ recipe: parsed, target: effectiveTarget, metadata, mappings, useAI: true }),
+          signal: ctrl.signal
         });
         if (!res.ok) throw new Error(`Backend responded ${res.status}`);
         const result: EngineOutput = await res.json();
@@ -225,6 +228,7 @@ export default function App() {
         setShowModal(false);
         return;
       } finally {
+        clearTimeout(timeout);
         setConverting(false);
       }
     }
@@ -830,27 +834,37 @@ export default function App() {
               >
                 <h2 className="egen-heading mt-0">sql generation options</h2>
                 <p className="egen-subtle mb-8">would you like to include the create or replace table statement in the output?</p>
-                
-                <div className="space-y-3">
-                  <button 
-                    onClick={() => handleConvert(true)}
-                    className="w-full py-4 bg-blue-900 text-white rounded-lg hover:bg-opacity-90 transition-all cursor-pointer text-sm"
-                  >
-                    include create or replace
-                  </button>
-                  <button 
-                    onClick={() => handleConvert(false)}
-                    className="w-full py-4 bg-blue-50 text-blue-900 rounded-lg hover:bg-blue-100 transition-all cursor-pointer text-sm"
-                  >
-                    just select statement
-                  </button>
-                  <button 
-                    onClick={() => setShowModal(false)}
-                    className="w-full py-4 text-gray-200 hover:text-gray-1000 transition-all cursor-pointer text-sm"
-                  >
-                    cancel
-                  </button>
-                </div>
+
+                {converting ? (
+                  <div className="flex flex-col items-center justify-center py-8 gap-4">
+                    <RefreshCw className="w-8 h-8 text-blue-900 animate-spin" />
+                    <p className="egen-subtle m-0 text-center">
+                      generating sql with gemini…
+                      <span className="block text-xs text-gray-400 mt-1">first run can take ~15s while the service wakes up</span>
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <button
+                      onClick={() => handleConvert(true)}
+                      className="w-full py-4 bg-blue-900 text-white rounded-lg hover:bg-opacity-90 transition-all cursor-pointer text-sm"
+                    >
+                      {useAI ? 'include create or replace · with gemini' : 'include create or replace'}
+                    </button>
+                    <button
+                      onClick={() => handleConvert(false)}
+                      className="w-full py-4 bg-blue-50 text-blue-900 rounded-lg hover:bg-blue-100 transition-all cursor-pointer text-sm"
+                    >
+                      {useAI ? 'just select statement · with gemini' : 'just select statement'}
+                    </button>
+                    <button
+                      onClick={() => setShowModal(false)}
+                      className="w-full py-4 text-gray-200 hover:text-gray-1000 transition-all cursor-pointer text-sm"
+                    >
+                      cancel
+                    </button>
+                  </div>
+                )}
               </motion.div>
             </div>
           )}
