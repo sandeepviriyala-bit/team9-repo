@@ -258,6 +258,13 @@ export class RecipeToSQLEngine {
         break;
       }
 
+      case 'save':
+      case 'output':
+        // Terminal write node — the outer CREATE TABLE/VIEW handles the sink.
+        sql = `  SELECT * FROM ${sources?.[0] || 'DUAL'}`;
+        this.cteBreakdown.push({ step: name, description: 'output passthrough' });
+        break;
+
       default:
         sql = `  SELECT * FROM ${sources?.[0] || 'DUAL'}`;
         this.issues.push(`unsupported action: ${action} in node ${name}`);

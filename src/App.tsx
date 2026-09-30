@@ -202,7 +202,7 @@ export default function App() {
     if (useAI) {
       setConverting(true);
       const ctrl = new AbortController();
-      const timeout = setTimeout(() => ctrl.abort(), 60000);
+      const timeout = setTimeout(() => ctrl.abort(), 240000);
       try {
         const res = await fetch('/api/convert', {
           method: 'POST',
@@ -220,10 +220,13 @@ export default function App() {
         // Fall back to the deterministic client-side engine if the backend is down.
         const engine = new RecipeToSQLEngine(parsed, effectiveTarget, metadata, mappings);
         const result = engine.generate();
+        const msg = e.name === 'AbortError'
+          ? 'AI timed out on this recipe (it may be very large). Showing deterministic output — try again; the service is now warm.'
+          : `AI backend error (${e.message}); showing deterministic output.`;
         setOutput({
           ...result,
           ai_enhanced: false,
-          ai_notes: [`AI backend unavailable (${e.message}); showing deterministic output.`]
+          ai_notes: [msg]
         });
         setShowModal(false);
         return;

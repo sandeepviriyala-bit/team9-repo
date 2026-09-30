@@ -97,6 +97,8 @@ export async function enhanceWithGemini(
     const response = await client.models.generateContent({
       model: MODEL,
       contents: buildPrompt(recipe, base, metadata),
+      // Large recipes produce long SQL; give the model room and keep it deterministic.
+      config: { maxOutputTokens: 32768, temperature: 0.1 },
     });
     const patch = parsePatch(response.text ?? '');
 
