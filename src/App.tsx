@@ -116,22 +116,36 @@ function parseMetadata(content: string, fileName: string): MetadataInfo {
   return info;
 }
 
+// The table name is the last segment of a fully-qualified project.dataset.table.
+const shortTableName = (t: string) => (t.includes('.') ? t.split('.').pop() || t : t);
+
 function autoMapTables(
   sourceTables: string[],
   targetTables: string[]
 ): { source: string; target: string }[] {
+  // Meaningful tokens only: drop <3-char noise like the trailing "c" of __c, so
+  // Salesforce objects (shared pse__ prefix, __c suffix) don't false-match.
+  const tokens = (s: string) =>
+    shortTableName(s).toLowerCase().replace(/[^a-z0-9]/g, ' ').split(/\s+/).filter(p => p.length >= 3);
+
   return sourceTables.map(src => {
-    const srcParts = src.toLowerCase().replace(/[^a-z0-9]/g, ' ').split(/\s+/);
+    const srcShortLower = shortTableName(src).toLowerCase();
+
+    // 1. Exact match on the table's short name wins (e.g. pse__Skill__c -> …pse__Skill__c).
+    const exact = targetTables.find(t => shortTableName(t).toLowerCase() === srcShortLower);
+    if (exact) return { source: src, target: exact };
+
+    // 2. Fuzzy fallback: score whole-token matches high, long substrings low.
+    const srcTok = tokens(src);
     let bestMatch = '';
     let bestScore = 0;
-
     for (const tgt of targetTables) {
-      const tgtParts = tgt.toLowerCase().replace(/[^a-z0-9]/g, ' ').split(/\s+/);
-      // Score: count of matching keyword parts
+      const tgtTok = tokens(tgt);
       let score = 0;
-      for (const sp of srcParts) {
-        for (const tp of tgtParts) {
-          if (sp && tp && (sp.includes(tp) || tp.includes(sp))) score++;
+      for (const sp of srcTok) {
+        for (const tp of tgtTok) {
+          if (sp === tp) score += 2;
+          else if (sp.length >= 4 && (sp.includes(tp) || tp.includes(sp))) score += 1;
         }
       }
       if (score > bestScore) {
@@ -139,7 +153,8 @@ function autoMapTables(
         bestMatch = tgt;
       }
     }
-    return { source: src, target: bestScore > 0 ? bestMatch : '' };
+    // Require at least one whole-token match so single weak substrings don't map.
+    return { source: src, target: bestScore >= 2 ? bestMatch : '' };
   });
 }
 
