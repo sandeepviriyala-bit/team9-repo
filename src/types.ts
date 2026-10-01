@@ -50,4 +50,7 @@ export interface EngineOutput {
   qa_queries: QAQueries;
   optimization_notes: string[];
   metadata_summary?: string;
+  // Populated only when the hybrid AI pass runs (POST /api/convert).
+  ai_enhanced?: boolean;
+  ai_notes?: string[];
 }

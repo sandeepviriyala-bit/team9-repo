@@ -2,6 +2,52 @@
 
 Enterprise-grade converter that transforms **Salesforce CRM Analytics Recipe JSON** into optimized **BigQuery SQL** — complete with CTE breakdown, table/column mapping, validation reports, and QA queries.
 
+A deterministic engine handles the core translation; an **optional hybrid AI pass** (Gemini via Vertex AI) fills the gaps the rules can't — unsupported recipe actions, complex formulas, and extra optimization suggestions.
+
+**Live demo:** <https://recipe-to-sql-dhkt3dxhuq-uc.a.run.app>
+
+## Overview
+
+### The problem
+Teams on **Salesforce CRM Analytics** build data transformations as visual
+"recipes," stored as JSON — a graph of steps (load, filter, aggregate, join,
+compute). Migrating that analytics to **Google BigQuery** means rewriting every
+recipe as SQL by hand: slow, error-prone, and requiring expertise in both worlds.
+
+### What this app does
+Paste or upload a recipe JSON (optionally your BigQuery schema) and it produces
+ready-to-run BigQuery SQL, plus a CTE breakdown, auto field/table mapping, a
+validation report, QA queries, and optimization notes. Internally it
+topologically sorts the recipe's node graph and translates each node into a
+named SQL CTE.
+
+### How AI is used (hybrid)
+The core translation is **deterministic** (`src/engine.ts`) — fast, free, and
+predictable, but it only knows five actions (`load`, `filter`, `aggregate`,
+`join`, `computeExpression`). AI fills the gaps rather than replacing the engine:
+
+1. The **engine runs first** and flags anything it can't handle (e.g. an
+   `unsupported action: pivot`).
+2. When AI mode is on, the backend sends **Gemini (via Vertex AI)** the recipe,
+   the engine's SQL, the flagged issues, and the metadata, and asks it to
+   translate the unsupported nodes, add optimizations, and explain its changes.
+3. Results are **merged** — deterministic SQL for known parts, Gemini's SQL for
+   the gaps — returned with an `ai_enhanced` flag and `ai_notes`.
+
+**Why hybrid:** guaranteed-correct output for the common cases (no LLM
+variability), AI only where rules fall short, and **graceful degradation** to the
+deterministic result if AI is unconfigured or unavailable — it never hard-fails.
+
+```
+React UI ──/api/convert──▶ Express backend
+                              ├─ RecipeToSQLEngine   (deterministic, always)
+                              └─ Gemini via Vertex AI (fills gaps, when enabled)
+```
+
+On Cloud Run the backend runs as a service account and calls Vertex AI through
+that identity — **no API keys**, governed access, and audit logging (the
+enterprise-appropriate choice over a raw API key).
+
 ## Features
 
 - **Recipe JSON Parsing** — paste or upload Salesforce recipe JSON; the engine topologically sorts the DAG of transformation nodes
@@ -12,6 +58,7 @@ Enterprise-grade converter that transforms **Salesforce CRM Analytics Recipe JSO
 - **Multi-Tab Output** — SQL, CTE breakdown, field mapping lineage, validation report, QA queries
 - **Copy & Export** — one-click copy to clipboard or download as `.sql` file
 - **Optimization Notes** — partition pruning, safe casting, and filter push-down suggestions
+- **Hybrid AI Mode (optional)** — toggle "enhance with gemini ai"; the backend runs the engine, then asks **Gemini (Vertex AI)** to translate unsupported nodes and add optimizations. Degrades gracefully to the deterministic output if AI is unconfigured or unavailable.
 
 ## Tech Stack
 
@@ -19,6 +66,10 @@ Enterprise-grade converter that transforms **Salesforce CRM Analytics Recipe JSO
 | ----------- | ----------------------------------------------- |
 | Frontend    | React 19, TypeScript, Tailwind CSS v4           |
 | Build       | Vite 6                                          |
+| Backend     | Express (`/api/convert`), Node 22               |
+| AI          | Gemini via Vertex AI (`@google/genai`)          |
+| Infra       | Cloud Run, Cloud Build, Artifact Registry       |
+| IaC         | Terraform (`terraform/`)                        |
 | Animations  | Framer Motion (motion)                          |
 | Icons       | Lucide React                                    |
 | Font        | Space Grotesk (Google Fonts)                    |
@@ -49,6 +100,8 @@ The app will be available at **http://localhost:3000**
 | Command           | Description                                |
 | ----------------- | ------------------------------------------ |
 | `npm run dev`     | Start Vite dev server with HMR (port 3000) |
+| `npm run server`  | Start Express backend for AI mode (port 8080) |
+| `npm run start`   | Run the backend serving built app + `/api` |
 | `npm run build`   | Create production build in `dist/`         |
 | `npm run preview` | Serve production build locally (port 4173) |
 | `npm run lint`    | TypeScript type checking (no emit)         |
@@ -72,6 +125,12 @@ egen-recipe-to-sql-engine/
 │   ├── index.css           # Tailwind + Egen brand theme
 │   └── lib/
 │       └── utils.ts        # Utility functions (cn helper)
+├── server/
+│   ├── index.ts            # Express backend: /api/convert, /api/health
+│   └── gemini.ts           # Hybrid AI pass (Vertex AI / Gemini)
+├── terraform/              # IaC: Artifact Registry, Cloud Run, IAM
+├── Dockerfile              # Node 22 image: builds frontend + serves /api
+└── SETUP.md                # GCP setup, IAM, deploy, team access
 ```
 
 ## How It Works
@@ -148,56 +207,46 @@ SELECT * FROM Agg_By_Industry
 
 ## Deployment
 
-### Docker
+Deployed to **Google Cloud Run** on project `idc-hackathon-509702`, running as
+the `pattern-team09-sa` service account (Vertex AI via ADC — no keys at runtime).
+The root `Dockerfile` (Node 22, multi-stage) builds the frontend and serves it
+together with the `/api` backend as one service.
 
-```dockerfile
-FROM node:18-alpine AS build
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci
-COPY . .
-RUN npm run build
-
-FROM nginx:alpine
-COPY --from=build /app/dist /usr/share/nginx/html
-EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
-```
+Deployment is two steps — build the image, then apply the Terraform:
 
 ```bash
-docker build -t egen-recipe-to-sql-engine .
-docker run -p 8080:80 egen-recipe-to-sql-engine
+# 1. Build & push a versioned image
+gcloud builds submit \
+  --tag us-central1-docker.pkg.dev/idc-hackathon-509702/egen-apps/recipe-to-sql:v1 \
+  --timeout=1200s .
+
+# 2. Provision / update infra (Cloud Run, Artifact Registry, IAM)
+cd terraform && terraform apply
 ```
 
-### Google Cloud Run
+See **[`SETUP.md`](./SETUP.md)** for full GCP setup (APIs, IAM, local dev,
+team access) and **[`terraform/README.md`](./terraform/README.md)** for the IaC.
 
-```bash
-# Build and push to Artifact Registry
-gcloud builds submit --tag gcr.io/YOUR_PROJECT/egen-recipe-to-sql-engine
-
-# Deploy to Cloud Run
-gcloud run deploy egen-recipe-to-sql-engine \
-  --image gcr.io/YOUR_PROJECT/egen-recipe-to-sql-engine \
-  --platform managed \
-  --region us-central1 \
-  --allow-unauthenticated
-```
-
-### Vercel / Netlify
-
-The project is a standard Vite app — deploy directly:
-
-- **Vercel**: `npx vercel --prod`
-- **Netlify**: Set build command to `npm run build` and publish directory to `dist`
+The frontend alone (deterministic mode, no AI) is a standard Vite app and can
+also be hosted statically on Vercel/Netlify (`npm run build` → `dist/`).
 
 ## Environment Variables
 
-| Variable         | Required | Description                          |
-| ---------------- | -------- | ------------------------------------ |
-| `GEMINI_API_KEY` | No       | Google Gemini API key (future use)   |
-| `DISABLE_HMR`    | No       | Set to `true` to disable Vite HMR   |
+Used by the backend (`server/`). Copy `.env.example` to `.env.local` for local
+dev; on Cloud Run they are set via Terraform.
 
-Copy `.env.example` to `.env.local` and fill in values as needed.
+| Variable                    | Required | Description                                                        |
+| --------------------------- | -------- | ------------------------------------------------------------------ |
+| `GOOGLE_GENAI_USE_VERTEXAI` | For AI   | `true` to use Vertex AI (recommended; uses ADC, no key)            |
+| `GOOGLE_CLOUD_PROJECT`      | For AI   | GCP project ID for Vertex AI                                       |
+| `GOOGLE_CLOUD_LOCATION`     | For AI   | Vertex AI region (e.g. `us-central1`)                              |
+| `GEMINI_MODEL`              | No       | Gemini model (default `gemini-2.5-flash`)                          |
+| `GEMINI_API_KEY`            | For AI   | Alternative to Vertex: AI Studio API key (simpler, less governed)  |
+| `PORT`                      | No       | Backend port (default `8080`; Cloud Run injects this)             |
+| `DISABLE_HMR`               | No       | Set to `true` to disable Vite HMR                                  |
+
+AI mode needs **either** the Vertex variables **or** `GEMINI_API_KEY`. Without
+either, the app still works in deterministic mode.
 
 ## License
 
