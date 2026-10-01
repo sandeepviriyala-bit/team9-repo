@@ -40,6 +40,8 @@ const DEFAULT_RECIPE = {
 interface MetadataInfo {
   tables: string[];
   columns: { table: string; column: string }[];
+  projectId?: string;
+  dataset?: string;
 }
 
 function parseMetadata(content: string, fileName: string): MetadataInfo {
@@ -52,11 +54,16 @@ function parseMetadata(content: string, fileName: string): MetadataInfo {
       // Handle array of schema entries: [{ table_name, column_name, ... }]
       if (Array.isArray(parsed)) {
         parsed.forEach((row: any) => {
-          const table = row.table_name || row.tableName || row.table || '';
+          const proj = row.project_id || row.projectId || row.project || '';
+          const ds = row.dataset_name || row.datasetName || row.dataset || row.schema || '';
+          const rawTable = row.table_name || row.tableName || row.table || '';
           const col = row.column_name || row.columnName || row.column || row.field_name || row.field || '';
-          if (table) {
+          if (rawTable) {
+            const table = rawTable.includes('.') ? rawTable : [proj, ds, rawTable].filter(Boolean).join('.');
             tableSet.add(table);
             if (col) info.columns.push({ table, column: col });
+            if (proj && !info.projectId) info.projectId = proj;
+            if (ds && !info.dataset) info.dataset = ds;
           }
         });
       // Handle object keyed by table name: { "table_name": { columns: [...] } }
@@ -83,17 +90,25 @@ function parseMetadata(content: string, fileName: string): MetadataInfo {
     const lines = content.trim().split('\n');
     if (lines.length < 2) return info;
     const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/['"]/g, ''));
+    const projIdx = headers.findIndex(h => ['project_id', 'projectid', 'project'].includes(h));
+    const dsIdx = headers.findIndex(h => ['dataset_name', 'datasetname', 'dataset', 'schema', 'schema_name'].includes(h));
     const tableIdx = headers.findIndex(h => ['table_name', 'tablename', 'table'].includes(h));
     const colIdx = headers.findIndex(h => ['column_name', 'columnname', 'column', 'field_name', 'field'].includes(h));
 
     for (let i = 1; i < lines.length; i++) {
       const cells = lines[i].split(',').map(c => c.trim().replace(/['"]/g, ''));
-      const table = tableIdx >= 0 ? cells[tableIdx] : '';
+      const proj = projIdx >= 0 ? cells[projIdx] : '';
+      const ds = dsIdx >= 0 ? cells[dsIdx] : '';
+      const rawTable = tableIdx >= 0 ? cells[tableIdx] : '';
       const col = colIdx >= 0 ? cells[colIdx] : '';
-      if (table) {
-        tableSet.add(table);
-        if (col) info.columns.push({ table, column: col });
-      }
+      if (!rawTable) continue;
+      // Build a fully-qualified name (project.dataset.table) when those columns
+      // exist and the table isn't already qualified.
+      const table = rawTable.includes('.') ? rawTable : [proj, ds, rawTable].filter(Boolean).join('.');
+      tableSet.add(table);
+      if (col) info.columns.push({ table, column: col });
+      if (proj && !info.projectId) info.projectId = proj;
+      if (ds && !info.dataset) info.dataset = ds;
     }
   }
 
@@ -266,6 +281,15 @@ export default function App() {
 
       const info = parseMetadata(content, file.name);
       setMetadataInfo(info);
+
+      // Auto-fill the BigQuery target's project & dataset from the metadata.
+      if (info.projectId || info.dataset) {
+        setTarget(prev => ({
+          ...prev,
+          projectId: info.projectId || prev.projectId,
+          dataset: info.dataset || prev.dataset,
+        }));
+      }
 
       if (info.tables.length > 0) {
         // Extract source tables from current recipe
