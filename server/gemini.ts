@@ -53,7 +53,17 @@ function buildPrompt(recipe: RecipeJSON, base: EngineOutput, metadata?: string):
     'Rules:',
     '- Only emit enhanced_sql if you actually fixed an unsupported action or a real bug.',
     '- Preserve the existing CTE structure and table/column mappings already applied.',
-    '- Use standard BigQuery SQL (backtick-quoted identifiers, SAFE_CAST, etc.).',
+    '- Use standard BigQuery SQL (SAFE_CAST, etc.).',
+    '- CRITICAL: a column alias (the name after AS) must be a valid BigQuery',
+    '  identifier — letters, digits and underscores only, and it must NEVER',
+    '  contain a dot. A dot in BigQuery means a struct/field path, so `AS a.b`',
+    '  is a syntax error. When you want an alias that reflects a source like',
+    '  "pse__Skill" + "Id", write pse__SkillId (drop the dot), and reference it',
+    '  the same dotless way everywhere downstream (SELECT, JOIN ON, WHERE).',
+    '- Wrap a fully-qualified table name (project.dataset.table) in backticks,',
+    '  especially when the project id contains a dash, e.g.',
+    '  `datawarehouse-350811.Egen_Certinia_Analysis.Contact`. Only table names',
+    '  get backticks; column aliases never do.',
     '',
     '### Recipe JSON',
     JSON.stringify(recipe, null, 2),
@@ -67,6 +77,28 @@ function buildPrompt(recipe: RecipeJSON, base: EngineOutput, metadata?: string):
     '### BigQuery metadata (optional context)',
     metadata ? metadata.slice(0, 4000) : '(none provided)',
   ].join('\n');
+}
+
+/**
+ * Safety net: BigQuery column aliases cannot contain a dot (it means a struct
+ * path). Gemini sometimes emits `AS pse__Skill.Id`. Find every dotted alias
+ * introduced with AS, and replace that exact dotted identifier everywhere in
+ * the SQL (definition + downstream references) with a dotless version.
+ * Fully-qualified table names (project.dataset.table) are left untouched because
+ * they never match a collected alias string.
+ */
+function sanitizeDottedAliases(sql: string): string {
+  const aliasRe = /\bAS\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)/g;
+  const dotted = new Set<string>();
+  let m: RegExpExecArray | null;
+  while ((m = aliasRe.exec(sql)) !== null) dotted.add(m[1]);
+  // Replace longest first so overlapping names resolve correctly.
+  const ordered = [...dotted].sort((a, b) => b.length - a.length);
+  let out = sql;
+  for (const d of ordered) {
+    out = out.split(d).join(d.replace(/\./g, ''));
+  }
+  return out;
 }
 
 function parsePatch(text: string): GeminiPatch {
@@ -111,7 +143,7 @@ export async function enhanceWithGemini(
 
     return {
       ...base,
-      final_sql: usedEnhanced ? patch.enhanced_sql!.trim() : base.final_sql,
+      final_sql: usedEnhanced ? sanitizeDottedAliases(patch.enhanced_sql!.trim()) : base.final_sql,
       validation_report: resolved
         ? { status: 'PASS' as const, issues: [] }
         : base.validation_report,
